@@ -38,6 +38,11 @@ export interface ProfileMetrics {
   maxActivitiesPerPipeline: number;
   maxActivitiesPipelineName: string;
   
+  // Custom activity statistics
+  customActivitiesCount: number;
+  totalCustomActivityReferences: number; // Total LinkedService references across all Custom activities
+  customActivitiesWithMultipleReferences: number; // Count of Custom activities with 2+ references
+  
   // Dependencies
   pipelineDependencies: number; // Execute Pipeline activities
   triggerPipelineMappings: number;
@@ -83,6 +88,13 @@ export interface ActivitySummary {
   name: string;
   type: string;
   description?: string;
+  // Custom activity metadata
+  isCustomActivity?: boolean;
+  customActivityReferences?: {
+    activityLevel?: string;
+    resource?: string;
+    referenceObjects?: string[];
+  };
 }
 
 export interface DatasetArtifact {

@@ -85,21 +85,38 @@ Supports 50+ connector types:
 - **SaaS Apps**: Salesforce, Dynamics 365, SAP, ServiceNow
 - **File Systems**: SFTP, FTP, HTTP, File Share
 
-### 4. **Workspace Identity Management**
+### 4. **Custom Activity Support**
+
+Full support for Custom activities with intelligent connection mapping:
+
+- **4-Tier Fallback System**: Automatically resolves connection references from multiple sources
+  - ✅ Reference ID-based mappings (primary method from UI)
+  - ✅ Activity name-based mappings (backward compatibility)
+  - ✅ LinkedService bridge (Configure Connections page)
+  - ✅ ConnectionService fallback (deployed connections registry)
+  
+- **Multiple Reference Locations**: Properly maps `externalReferences.connection` properties
+  - Activity-level: `linkedServiceName.referenceName` → `externalReferences.connection`
+  - Resource-level: `typeProperties.resourceLinkedService` → `typeProperties.externalReferences.connection`
+  - Reference objects: `typeProperties.referenceObjects.linkedServices[]` → preserved in `extendedProperties`
+
+- **Detailed Logging**: Console output with emoji indicators (✓ success, ⚠ warning, ✗ error) for debugging
+
+### 5. **Workspace Identity Management**
 
 - **Automatic Detection**: Identifies Managed Identity usages in ADF
 - **Seamless Conversion**: Maps to Fabric Workspace Identity
 - **Authentication Methods**: Supports Managed Identity, Service Principal, SQL Auth, Key-based
 - **Scope Management**: Handles Azure AD application registrations
 
-### 5. **Folder Structure Preservation**
+### 6. **Folder Structure Preservation**
 
 - Extracts ADF folder hierarchy
 - Creates matching folder structure in Fabric
 - Maintains organizational logic
 - Supports nested folders
 
-### 6. **Smart Schedule Configuration** ✨ NEW
+### 7. **Smart Schedule Configuration** ✨ NEW
 
 - **Trigger State Detection**: Automatically detects Started/Stopped status from ADF triggers
 - **Visual Schedule Management**: See exactly which pipelines each schedule will activate
@@ -109,7 +126,7 @@ Supports 50+ connector types:
 - **Full Control**: Review and adjust all schedule settings before deployment
 - **Runtime State Awareness**: Clearly indicates if source ADF trigger was running or stopped
 
-### 7. **Deployment Features**
+### 8. **Deployment Features**
 
 - **Progress Tracking**: Real-time deployment status
 - **Error Handling**: Detailed error messages with resolution guidance
@@ -117,7 +134,7 @@ Supports 50+ connector types:
 - **Batch Operations**: Deploy multiple components simultaneously
 - **Validation**: Pre-deployment compatibility checks
 
-### 8. **Synapse Support**
+### 9. **Synapse Support**
 
 - Full support for Azure Synapse Analytics pipelines
 - Synapse-specific activities (Notebook, Spark Job, SQL Pool)
@@ -997,6 +1014,38 @@ npm run test:coverage # Generate coverage report
 - ✅ Verify activities are supported (see supported activities list)
 - ✅ Check parameter names are valid (alphanumeric + underscore)
 - ✅ Review error message for specific validation issues
+
+#### Custom Activity Connection Issues
+
+**Symptoms**: Custom activities deployed without connection references
+
+**Problem**: Missing `externalReferences.connection` in deployed pipeline JSON, activities fail to access external resources
+
+**Solutions**:
+
+The application uses a 4-tier fallback system to resolve connections. Check browser console for mapping logs:
+
+```
+✓ Custom activity [P1-NEW] activity-level connection found via referenceMappings
+✓ Custom activity [P2-OLD] resource connection found via customActivityReferences
+✓ Custom activity [P3-BRIDGE] connection found via linkedServiceBridge
+⚠ Custom activity [P4-FALLBACK] using connection service fallback
+✗ No connection mapping found for Custom activity LinkedService
+```
+
+**Debugging Steps**:
+1. ✅ Verify connections configured in "Configure Connections" page (step 5)
+2. ✅ Check "Map Components" page shows all custom activities with dropdowns (step 8)
+3. ✅ Review browser console (F12) for detailed connection resolution logs
+4. ✅ Ensure connection IDs match between Configure Connections and Map Components
+5. ✅ Verify LinkedService names in ADF template match dropdown options
+
+**Technical Details**: Custom activities have 3 LinkedService reference locations:
+- **Activity-level**: `linkedServiceName.referenceName` → `externalReferences.connection`
+- **Resource-level**: `typeProperties.resourceLinkedService` → `typeProperties.externalReferences.connection`
+- **Reference objects**: `typeProperties.referenceObjects.linkedServices[]` → preserved in `extendedProperties`
+
+Each location must be mapped to a Fabric connection ID. The transformer attempts multiple mapping strategies automatically with fallback priorities.
 
 ### Debug Mode
 

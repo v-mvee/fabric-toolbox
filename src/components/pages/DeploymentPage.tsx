@@ -75,8 +75,12 @@ export function DeploymentPage() {
         },
         // Connection results are handled by separate deployment flow
         [],
-        // Pipeline connection mappings for activity transformation
-        state.pipelineConnectionMappings || {}
+        // Pipeline connection mappings for activity transformation (OLD format - backward compatibility)
+        state.pipelineConnectionMappings || {},
+        // Pipeline reference mappings for Custom activity transformation (NEW referenceId-based)
+        state.pipelineReferenceMappings || {},
+        // LinkedService bridge for Custom activity fallback
+        state.linkedServiceConnectionBridge || {}
       );
 
       // Process all results

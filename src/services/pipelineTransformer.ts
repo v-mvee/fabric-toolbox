@@ -1,12 +1,39 @@
 import { activityTransformer } from './activityTransformer';
 import { copyActivityTransformer } from './copyActivityTransformer';
+import { customActivityTransformer } from './customActivityTransformer';
 import { connectionService } from './connectionService';
 import { fabricApiClient } from './fabricApiClient';
-import { ADFComponent, DeploymentResult, PipelineConnectionMappings } from '../types';
+import { ADFComponent, DeploymentResult, PipelineConnectionMappings, LinkedServiceConnectionBridge } from '../types';
 import { PipelineConnectionTransformerService } from './pipelineConnectionTransformerService';
 
 export class PipelineTransformer {
-  transformPipelineDefinition(definition: any, connectionMappings?: PipelineConnectionMappings): any {
+  // Store current pipeline name for activity transformation context
+  private currentPipelineName: string = '';
+  
+  // Store reference mappings and bridge for Custom activity transformation
+  private referenceMappings?: Record<string, Record<string, string>>;
+  private linkedServiceBridge?: LinkedServiceConnectionBridge;
+
+  /**
+   * Set reference mappings (NEW referenceId-based mappings from ComponentMappingTableV2)
+   */
+  setReferenceMappings(mappings: Record<string, Record<string, string>>) {
+    this.referenceMappings = mappings;
+    customActivityTransformer.setReferenceMappings(mappings);
+  }
+
+  /**
+   * Set LinkedService bridge (from Configure Connections page)
+   */
+  setLinkedServiceBridge(bridge: LinkedServiceConnectionBridge) {
+    this.linkedServiceBridge = bridge;
+    customActivityTransformer.setLinkedServiceBridge(bridge);
+  }
+
+  transformPipelineDefinition(definition: any, connectionMappings?: PipelineConnectionMappings, pipelineName?: string): any {
+    // Store pipeline name for activity transformation
+    this.currentPipelineName = pipelineName || 'unknown';
+
     if (!definition) {
       console.warn('No pipeline definition provided');
       return { properties: {} };
@@ -107,22 +134,35 @@ export class PipelineTransformer {
 
   transformActivities(activities: any[], connectionMappings?: PipelineConnectionMappings): any[] {
     if (!Array.isArray(activities)) return [];
+    
+    // Get pipeline name from context
+    const pipelineName = this.currentPipelineName || 'unknown';
+    
     return activities.map(activity => {
       if (!activity || typeof activity !== 'object') return activity;
 
-      // Apply activity-level transformations using activityTransformer
-      activityTransformer.transformLinkedServiceReferencesToFabric(activity);
+      // Apply activity-level transformations (skip Copy and Custom - they have specialized transformers)
+      if (activity.type !== 'Copy' && activity.type !== 'Custom') {
+        activityTransformer.transformLinkedServiceReferencesToFabric(activity);
+      }
 
       if (activityTransformer.activityReferencesFailedConnector(activity)) {
         activity.state = 'Inactive';
         activity.onInactiveMarkAs = 'Succeeded';
       }
 
-      // Apply specialized transformation for Copy activities
+      // Apply specialized transformation based on activity type
       let transformedActivity = activity;
       if (activity.type === 'Copy') {
         // Pass connection mappings to Copy activity transformer
         transformedActivity = copyActivityTransformer.transformCopyActivity(activity, connectionMappings);
+      } else if (activity.type === 'Custom') {
+        // NEW: Transform Custom activities with connection mappings
+        transformedActivity = customActivityTransformer.transformCustomActivity(
+          activity,
+          pipelineName,
+          connectionMappings
+        );
       } else if (activity.type === 'ExecutePipeline') {
         // Transform ExecutePipeline to InvokePipeline
         transformedActivity = this.transformExecutePipelineToInvokePipeline(activity, connectionMappings);
@@ -135,11 +175,17 @@ export class PipelineTransformer {
         typeProperties: this.transformActivityTypeProperties(transformedActivity.type, transformedActivity.typeProperties || {}, connectionMappings),
         dependsOn: this.transformActivityDependencies(transformedActivity.dependsOn || []),
         userProperties: transformedActivity.userProperties || [],
-        policy: transformedActivity.policy || {}
+        policy: transformedActivity.policy || {},
+        // Override connectVia to empty object for Fabric (no IntegrationRuntimeReference support)
+        connectVia: {}
       };
 
-      // For non-Copy activities, still transform inputs/outputs using activityTransformer
-      if (activity.type !== 'Copy') {
+      // Remove ADF-specific properties that Fabric doesn't support
+      delete (finalActivity as any).linkedServiceName;
+      delete (finalActivity as any).linkedService;
+
+      // Transform inputs/outputs for non-Copy and non-Custom activities
+      if (activity.type !== 'Copy' && activity.type !== 'Custom') {
         finalActivity.inputs = activityTransformer.transformActivityInputs(activity.inputs || []);
         finalActivity.outputs = activityTransformer.transformActivityOutputs(activity.outputs || []);
       }
@@ -153,6 +199,10 @@ export class PipelineTransformer {
     switch (activityType) {
       case 'Copy': 
         // Copy activities are already fully transformed by copyActivityTransformer
+        // Return as-is to avoid overriding the detailed transformation
+        return typeProperties;
+      case 'Custom':
+        // Custom activities are already fully transformed by customActivityTransformer
         // Return as-is to avoid overriding the detailed transformation
         return typeProperties;
       case 'ExecutePipeline': return this.transformExecutePipelineProperties(typeProperties);
@@ -288,7 +338,12 @@ export class PipelineTransformer {
     const headers = { 'Authorization': `Bearer ${accessToken}`, 'Content-Type': 'application/json' };
     try {
       // First, transform the basic pipeline definition with connection mappings
-      let pipelineDefinition = this.transformPipelineDefinition(component.definition, connectionMappings);
+      // Pass pipeline name for Custom activity context
+      let pipelineDefinition = this.transformPipelineDefinition(
+        component.definition,
+        connectionMappings,
+        component.name
+      );
       
       // Apply connection mappings if provided (this ensures double application isn't happening)
       if (connectionMappings) {
@@ -316,8 +371,11 @@ export class PipelineTransformer {
         }
       }
 
+      // Clean pipeline definition by removing ADF-specific properties before deployment
+      const cleanedDefinition = PipelineConnectionTransformerService.cleanPipelineForFabric(updatedDefinition);
+
       // Generate Base64 payload using the connection transformer service
-      const base64Payload = PipelineConnectionTransformerService.generateFabricPipelinePayload(updatedDefinition);
+      const base64Payload = PipelineConnectionTransformerService.generateFabricPipelinePayload(cleanedDefinition);
 
       // Get folder ID if component has folder information
       let folderId: string | undefined;

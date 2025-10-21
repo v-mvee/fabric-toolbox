@@ -229,6 +229,7 @@ export function createDefaultAppState(): AppState {
       error: null
     },
     pipelineConnectionMappings: {},
+    pipelineReferenceMappings: {},
     linkedServiceConnectionBridge: {},
     workspaceCredentials: {
       credentials: [],

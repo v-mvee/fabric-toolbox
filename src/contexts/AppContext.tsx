@@ -52,6 +52,7 @@ type AppAction =
   | { type: 'ADD_CONNECTION_DEPLOYMENT_RESULT'; payload: ConnectionDeploymentResult }
   | { type: 'SET_PIPELINE_CONNECTION_MAPPINGS'; payload: PipelineConnectionMappings }
   | { type: 'UPDATE_PIPELINE_CONNECTION_MAPPING'; payload: { pipelineName: string; activityName: string; mapping: any } }
+  | { type: 'UPDATE_CUSTOM_ACTIVITY_MAPPING'; payload: { pipelineName: string; activityName: string; reference: any } }
   | { type: 'BUILD_LINKEDSERVICE_CONNECTION_BRIDGE'; payload: any }
   | { type: 'UPDATE_BRIDGE_MAPPING'; payload: { linkedServiceName: string; mapping: any } }
   | { type: 'SET_WORKSPACE_CREDENTIALS'; payload: WorkspaceCredentialState }
@@ -282,6 +283,38 @@ function appReducer(state: AppState, action: AppAction): AppState {
           }
         }
       };
+    
+    case 'UPDATE_CUSTOM_ACTIVITY_MAPPING': {
+      const { pipelineName: customPipelineName, activityName: customActivityName, reference } = action.payload;
+      const existingMapping = state.pipelineConnectionMappings[customPipelineName]?.[customActivityName] || {};
+      const existingReferences = existingMapping.customActivityReferences || [];
+      
+      // Update or add the reference based on location and arrayIndex
+      const updatedReferences = [...existingReferences];
+      const existingIndex = updatedReferences.findIndex(
+        ref => ref.location === reference.location && ref.arrayIndex === reference.arrayIndex
+      );
+      
+      if (existingIndex >= 0) {
+        updatedReferences[existingIndex] = reference;
+      } else {
+        updatedReferences.push(reference);
+      }
+      
+      return {
+        ...state,
+        pipelineConnectionMappings: {
+          ...state.pipelineConnectionMappings,
+          [customPipelineName]: {
+            ...state.pipelineConnectionMappings[customPipelineName],
+            [customActivityName]: {
+              ...existingMapping,
+              customActivityReferences: updatedReferences
+            }
+          }
+        }
+      };
+    }
     
     case 'BUILD_LINKEDSERVICE_CONNECTION_BRIDGE':
       return { 

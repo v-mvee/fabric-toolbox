@@ -1,4 +1,4 @@
-import { ADFComponent, DeploymentResult, WorkspaceInfo, ComponentMapping, ApiError, SupportedConnectionType, PipelineConnectionMappings } from '../types';
+import { ADFComponent, DeploymentResult, WorkspaceInfo, ComponentMapping, ApiError, SupportedConnectionType, PipelineConnectionMappings, LinkedServiceConnectionBridge } from '../types';
 import { gatewayService } from './gatewayService';
 import { connectionService } from './connectionService';
 import { pipelineTransformer } from './pipelineTransformer';
@@ -369,15 +369,29 @@ export class FabricService {
     workspaceId: string,
     onProgress?: (progress: { current: number; total: number; status: string }) => void,
     connectionResults?: import('../types').ConnectionDeploymentResult[],
-    pipelineConnectionMappings?: PipelineConnectionMappings
+    pipelineConnectionMappings?: PipelineConnectionMappings,
+    pipelineReferenceMappings?: Record<string, Record<string, string>>,
+    linkedServiceBridge?: LinkedServiceConnectionBridge
   ): Promise<DeploymentResult[]> {
     console.log('FabricService.deployComponents starting with:', {
       componentsCount: mappedComponents.length,
       workspaceId,
       hasAccessToken: Boolean(accessToken),
       hasConnectionResults: Boolean(connectionResults),
-      hasPipelineConnectionMappings: Boolean(pipelineConnectionMappings)
+      hasPipelineConnectionMappings: Boolean(pipelineConnectionMappings),
+      hasPipelineReferenceMappings: Boolean(pipelineReferenceMappings),
+      hasLinkedServiceBridge: Boolean(linkedServiceBridge)
     });
+
+    // Set reference mappings and bridge for Custom activity transformation
+    if (pipelineReferenceMappings) {
+      pipelineTransformer.setReferenceMappings(pipelineReferenceMappings);
+      console.log('✓ Set pipelineReferenceMappings for Custom activity transformation');
+    }
+    if (linkedServiceBridge) {
+      pipelineTransformer.setLinkedServiceBridge(linkedServiceBridge);
+      console.log('✓ Set linkedServiceBridge for Custom activity transformation');
+    }
 
     try {
       const results: DeploymentResult[] = [];

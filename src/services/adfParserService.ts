@@ -1322,11 +1322,17 @@ class ADFParserService {
     avgActivitiesPerPipeline: number;
     maxActivitiesPerPipeline: number;
     maxActivitiesPipelineName: string;
+    customActivitiesCount: number;
+    totalCustomActivityReferences: number;
+    customActivitiesWithMultipleReferences: number;
   } {
     let totalActivities = 0;
     const activitiesByType: Record<string, number> = {};
     let maxActivities = 0;
     let maxPipelineName = '';
+    let customActivitiesCount = 0;
+    let totalCustomActivityReferences = 0;
+    let customActivitiesWithMultipleReferences = 0;
 
     pipelines.forEach(pipeline => {
       const activities = pipeline.definition?.properties?.activities || [];
@@ -1342,6 +1348,38 @@ class ADFParserService {
       activities.forEach((activity: any) => {
         const type = activity.type || 'Unknown';
         activitiesByType[type] = (activitiesByType[type] || 0) + 1;
+        
+        // Track Custom activity statistics
+        if (type === 'Custom') {
+          customActivitiesCount++;
+          
+          // Count LinkedService references in all 3 locations
+          let referenceCount = 0;
+          
+          // Location 1: linkedServiceName (activity-level, required)
+          if (activity.linkedServiceName?.referenceName) {
+            referenceCount++;
+          }
+          
+          // Location 2: typeProperties.resourceLinkedService (optional)
+          if (activity.typeProperties?.resourceLinkedService?.referenceName) {
+            referenceCount++;
+          }
+          
+          // Location 3: typeProperties.referenceObjects.linkedServices[] (optional)
+          if (activity.typeProperties?.referenceObjects?.linkedServices) {
+            const linkedServices = activity.typeProperties.referenceObjects.linkedServices;
+            if (Array.isArray(linkedServices)) {
+              referenceCount += linkedServices.length;
+            }
+          }
+          
+          totalCustomActivityReferences += referenceCount;
+          
+          if (referenceCount >= 2) {
+            customActivitiesWithMultipleReferences++;
+          }
+        }
       });
     });
 
@@ -1350,7 +1388,10 @@ class ADFParserService {
       activitiesByType,
       avgActivitiesPerPipeline: pipelines.length > 0 ? totalActivities / pipelines.length : 0,
       maxActivitiesPerPipeline: maxActivities,
-      maxActivitiesPipelineName: maxPipelineName
+      maxActivitiesPipelineName: maxPipelineName,
+      customActivitiesCount,
+      totalCustomActivityReferences,
+      customActivitiesWithMultipleReferences
     };
   }
 
@@ -1639,11 +1680,41 @@ class ADFParserService {
       const folderInfo = extractFolderFromPipeline(pipeline);
       const folder = folderInfo ? folderInfo.path : null;
 
-      const activitySummaries: ActivitySummary[] = activities.map((activity: any) => ({
-        name: activity.name || 'Unnamed',
-        type: activity.type || 'Unknown',
-        description: activity.description
-      }));
+      const activitySummaries: ActivitySummary[] = activities.map((activity: any) => {
+        const summary: ActivitySummary = {
+          name: activity.name || 'Unnamed',
+          type: activity.type || 'Unknown',
+          description: activity.description
+        };
+        
+        // Add Custom activity metadata
+        if (activity.type === 'Custom') {
+          summary.isCustomActivity = true;
+          summary.customActivityReferences = {};
+          
+          // Track activity-level LinkedService reference
+          if (activity.linkedServiceName?.referenceName) {
+            summary.customActivityReferences.activityLevel = activity.linkedServiceName.referenceName;
+          }
+          
+          // Track resource LinkedService reference
+          if (activity.typeProperties?.resourceLinkedService?.referenceName) {
+            summary.customActivityReferences.resource = activity.typeProperties.resourceLinkedService.referenceName;
+          }
+          
+          // Track reference objects LinkedService references
+          if (activity.typeProperties?.referenceObjects?.linkedServices) {
+            const linkedServices = activity.typeProperties.referenceObjects.linkedServices;
+            if (Array.isArray(linkedServices)) {
+              summary.customActivityReferences.referenceObjects = linkedServices.map((ls: any) => 
+                ls.referenceName || 'Unknown'
+              );
+            }
+          }
+        }
+        
+        return summary;
+      });
 
       const usesDatasets: string[] = [];
       const executesPipelines: string[] = [];
@@ -2101,6 +2172,66 @@ class ADFParserService {
             type: 'dependsOn',
             label: 'depends on'
           });
+        }
+      });
+    });
+
+    // NEW: Create edges for Custom activity LinkedService references
+    // Custom activities have 3 potential LinkedService reference locations, represented with color-coded edges
+    artifacts.pipelines.forEach(pipeline => {
+      pipeline.activities.forEach(activity => {
+        if (activity.isCustomActivity && activity.customActivityReferences) {
+          const customRefs = activity.customActivityReferences;
+          
+          // Location 1: Activity-level LinkedService (required) - Blue edge
+          if (customRefs.activityLevel) {
+            edges.push({
+              source: `pipeline_${pipeline.name}`,
+              target: `linkedService_${customRefs.activityLevel}`,
+              type: 'uses',
+              label: `Custom: ${activity.name} (activity-level)`
+            });
+          }
+          
+          // Location 2: Resource LinkedService (optional) - Orange edge
+          if (customRefs.resource) {
+            // Check if this edge already exists from location 1
+            const edgeExists = edges.some(e => 
+              e.source === `pipeline_${pipeline.name}` && 
+              e.target === `linkedService_${customRefs.resource}` &&
+              e.label?.includes(activity.name)
+            );
+            
+            if (!edgeExists) {
+              edges.push({
+                source: `pipeline_${pipeline.name}`,
+                target: `linkedService_${customRefs.resource}`,
+                type: 'references',
+                label: `Custom: ${activity.name} (resource)`
+              });
+            }
+          }
+          
+          // Location 3: Reference Objects LinkedServices (optional array) - Purple edges
+          if (customRefs.referenceObjects) {
+            customRefs.referenceObjects.forEach((linkedServiceName, index) => {
+              // Check if this edge already exists from previous locations
+              const edgeExists = edges.some(e => 
+                e.source === `pipeline_${pipeline.name}` && 
+                e.target === `linkedService_${linkedServiceName}` &&
+                e.label?.includes(activity.name)
+              );
+              
+              if (!edgeExists) {
+                edges.push({
+                  source: `pipeline_${pipeline.name}`,
+                  target: `linkedService_${linkedServiceName}`,
+                  type: 'references',
+                  label: `Custom: ${activity.name} (ref-obj[${index}])`
+                });
+              }
+            });
+          }
         }
       });
     });
