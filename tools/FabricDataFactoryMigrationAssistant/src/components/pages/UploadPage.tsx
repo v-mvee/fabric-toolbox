@@ -4,7 +4,7 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Progress } from '@/components/ui/progress';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
-import { CloudArrowUp, FilePlus, CheckCircle, Warning, ChartBar } from '@phosphor-icons/react';
+import { CloudArrowUp, FilePlus, CheckCircle, Warning, ChartBar, GitBranch } from '@phosphor-icons/react';
 import { WizardLayout } from '../WizardLayout';
 import { useAppContext } from '../../contexts/AppContext';
 import { adfParserService } from '../../services/adfParserService';
@@ -256,6 +256,32 @@ export function UploadPage() {
                         ))}
                       </div>
                     </div>
+                  )}
+                  
+                  {/* Custom Activity Detection Alert */}
+                  {profile && profile.metrics.customActivitiesCount > 0 && (
+                    <Alert className="mt-3 bg-fuchsia-50 dark:bg-fuchsia-950/30 border-fuchsia-300 dark:border-fuchsia-700">
+                      <GitBranch size={14} className="text-fuchsia-600 dark:text-fuchsia-400" />
+                      <AlertDescription className="text-sm">
+                        <div className="font-semibold text-fuchsia-900 dark:text-fuchsia-100 mb-1">
+                          Custom Activities Detected: {profile.metrics.customActivitiesCount}
+                        </div>
+                        <div className="text-fuchsia-800 dark:text-fuchsia-200 space-y-1">
+                          <div>
+                            Found <strong>{profile.metrics.totalCustomActivityReferences} LinkedService references</strong> across {profile.metrics.customActivitiesCount} Custom activities.
+                          </div>
+                          {profile.metrics.customActivitiesWithMultipleReferences > 0 && (
+                            <div className="text-xs">
+                              ⚠️ {profile.metrics.customActivitiesWithMultipleReferences} activities have multiple references requiring special attention.
+                            </div>
+                          )}
+                          <div className="text-xs mt-2 pt-2 border-t border-fuchsia-300 dark:border-fuchsia-700">
+                            <strong>Action Required:</strong> Custom activities reference LinkedServices in up to 3 locations. 
+                            You'll need to map each reference on the <strong>Map Components</strong> page.
+                          </div>
+                        </div>
+                      </AlertDescription>
+                    </Alert>
                   )}
                 </CardContent>
               </Card>
