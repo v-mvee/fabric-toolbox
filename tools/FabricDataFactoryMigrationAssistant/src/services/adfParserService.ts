@@ -8,6 +8,8 @@ import {
   isValidComponentType 
 } from '../lib/validation';
 import { extractFolderFromPipeline } from './folderAnalysisService';
+import { globalParameterDetectionService } from './globalParameterDetectionService';
+import { parameterizedLinkedServiceDetectionService } from './parameterizedLinkedServiceDetectionService';
 import {
   ADFProfile,
   ProfileMetrics,
@@ -144,6 +146,52 @@ class ADFParserService {
 
     // Apply validation rules to each component
     const validatedComponents = components.map(component => this.validateComponent(component));
+    
+    // Detect global parameters from pipelines (NEW)
+    console.log('[ADFParserService] Detecting global parameters...');
+    const globalParameterReferences = globalParameterDetectionService.detectWithFallback(
+      validatedComponents,
+      armTemplate
+    );
+    
+    if (globalParameterReferences.length > 0) {
+      console.log(`[ADFParserService] Detected ${globalParameterReferences.length} global parameters`);
+      // Store in each component for reference (optional - mainly for state dispatch)
+      validatedComponents.forEach(component => {
+        if (component.type === 'pipeline') {
+          component.globalParameterReferences = globalParameterReferences;
+        }
+      });
+    }
+    
+    // Detect parameterized LinkedServices (NEW)
+    console.log('[ADFParserService] Detecting parameterized LinkedServices...');
+    const parameterizedLinkedServices = parameterizedLinkedServiceDetectionService.detectParameterizedLinkedServices(validatedComponents);
+    
+    if (parameterizedLinkedServices.length > 0) {
+      console.log(`[ADFParserService] Detected ${parameterizedLinkedServices.length} parameterized LinkedServices`);
+      
+      // Add warnings to each component
+      validatedComponents.forEach(component => {
+        parameterizedLinkedServices.forEach(plsInfo => {
+          // Add warning to the LinkedService itself
+          if (component.type === 'linkedService' && component.name === plsInfo.linkedServiceName) {
+            component.warnings = component.warnings || [];
+            component.warnings.push(plsInfo.warningMessage);
+            component.parameterizedLinkedServiceInfo = plsInfo;
+          }
+          
+          // Add warning to affected pipelines
+          if (component.type === 'pipeline' && plsInfo.affectedPipelines.includes(component.name)) {
+            component.warnings = component.warnings || [];
+            const linkedServiceWarning = `Uses parameterized LinkedService '${plsInfo.linkedServiceName}' (${plsInfo.parameters.length} parameters) - requires manual reconfiguration in Fabric`;
+            if (!component.warnings.includes(linkedServiceWarning)) {
+              component.warnings.push(linkedServiceWarning);
+            }
+          }
+        });
+      });
+    }
     
     // Store the parsed components for later retrieval
     this.parsedComponents = validatedComponents;
@@ -619,6 +667,7 @@ class ADFParserService {
     pipelines: string[];
     datasets: string[];
     triggers: string[];
+    dataflows: string[];
     other: string[];
   } {
     const dependencies = {
@@ -626,6 +675,7 @@ class ADFParserService {
       pipelines: [] as string[],
       datasets: [] as string[],
       triggers: [] as string[],
+      dataflows: [] as string[],
       other: [] as string[]
     };
 
@@ -673,9 +723,9 @@ class ADFParserService {
             }
             break;
           case 'dataflows':
-            // Dataflows are typically treated as pipelines in dependency context
-            if (!dependencies.pipelines.includes(cleanName)) {
-              dependencies.pipelines.push(cleanName);
+            // Track dataflows separately from pipelines
+            if (!dependencies.dataflows.includes(cleanName)) {
+              dependencies.dataflows.push(cleanName);
             }
             break;
         }
@@ -1214,8 +1264,15 @@ class ADFParserService {
       supported: 0,
       partiallySupported: 0,
       unsupported: 0,
-      byType: {}
+      byType: {},
+      parameterizedLinkedServicesCount: 0,
+      parameterizedLinkedServicesPipelineCount: 0,
+      parameterizedLinkedServicesNames: []
     };
+
+    // Collect parameterized LinkedServices
+    const parameterizedLinkedServicesSet = new Set<string>();
+    const affectedPipelinesSet = new Set<string>();
 
     safeComponents.forEach(component => {
       if (!component) {
@@ -1237,7 +1294,20 @@ class ADFParserService {
       if (component.type) {
         summary.byType[component.type] = (summary.byType[component.type] || 0) + 1;
       }
+      
+      // Track parameterized LinkedServices
+      if (component.type === 'linkedService' && component.parameterizedLinkedServiceInfo) {
+        parameterizedLinkedServicesSet.add(component.name);
+        component.parameterizedLinkedServiceInfo.affectedPipelines.forEach(pName => {
+          affectedPipelinesSet.add(pName);
+        });
+      }
     });
+    
+    // Update summary with parameterized LinkedService info
+    summary.parameterizedLinkedServicesCount = parameterizedLinkedServicesSet.size;
+    summary.parameterizedLinkedServicesPipelineCount = affectedPipelinesSet.size;
+    summary.parameterizedLinkedServicesNames = Array.from(parameterizedLinkedServicesSet);
 
     return summary;
   }
@@ -1298,6 +1368,13 @@ class ADFParserService {
     
     // Calculate usage statistics
     const usageStats = this.calculateUsageStatistics(components);
+    
+    // Calculate parameterized LinkedService statistics
+    const parameterizedLinkedServices = linkedServices.filter(ls => ls.parameterizedLinkedServiceInfo);
+    const totalParameterizedLinkedServiceParameters = parameterizedLinkedServices.reduce(
+      (sum, ls) => sum + (ls.parameterizedLinkedServiceInfo?.parameters.length || 0),
+      0
+    );
 
     return {
       totalPipelines: pipelines.length,
@@ -1307,6 +1384,8 @@ class ADFParserService {
       totalDataflows: dataflows.length,
       totalIntegrationRuntimes: integrationRuntimes.length,
       totalGlobalParameters: globalParameters.length,
+      parameterizedLinkedServicesCount: parameterizedLinkedServices.length,
+      totalParameterizedLinkedServiceParameters,
       ...activityStats,
       ...dependencies,
       ...usageStats
@@ -1322,11 +1401,17 @@ class ADFParserService {
     avgActivitiesPerPipeline: number;
     maxActivitiesPerPipeline: number;
     maxActivitiesPipelineName: string;
+    customActivitiesCount: number;
+    totalCustomActivityReferences: number;
+    customActivitiesWithMultipleReferences: number;
   } {
     let totalActivities = 0;
     const activitiesByType: Record<string, number> = {};
     let maxActivities = 0;
     let maxPipelineName = '';
+    let customActivitiesCount = 0;
+    let totalCustomActivityReferences = 0;
+    let customActivitiesWithMultipleReferences = 0;
 
     pipelines.forEach(pipeline => {
       const activities = pipeline.definition?.properties?.activities || [];
@@ -1342,6 +1427,38 @@ class ADFParserService {
       activities.forEach((activity: any) => {
         const type = activity.type || 'Unknown';
         activitiesByType[type] = (activitiesByType[type] || 0) + 1;
+        
+        // Track Custom activity statistics
+        if (type === 'Custom') {
+          customActivitiesCount++;
+          
+          // Count LinkedService references in all 3 locations
+          let referenceCount = 0;
+          
+          // Location 1: linkedServiceName (activity-level, required)
+          if (activity.linkedServiceName?.referenceName) {
+            referenceCount++;
+          }
+          
+          // Location 2: typeProperties.resourceLinkedService (optional)
+          if (activity.typeProperties?.resourceLinkedService?.referenceName) {
+            referenceCount++;
+          }
+          
+          // Location 3: typeProperties.referenceObjects.linkedServices[] (optional)
+          if (activity.typeProperties?.referenceObjects?.linkedServices) {
+            const linkedServices = activity.typeProperties.referenceObjects.linkedServices;
+            if (Array.isArray(linkedServices)) {
+              referenceCount += linkedServices.length;
+            }
+          }
+          
+          totalCustomActivityReferences += referenceCount;
+          
+          if (referenceCount >= 2) {
+            customActivitiesWithMultipleReferences++;
+          }
+        }
       });
     });
 
@@ -1350,7 +1467,10 @@ class ADFParserService {
       activitiesByType,
       avgActivitiesPerPipeline: pipelines.length > 0 ? totalActivities / pipelines.length : 0,
       maxActivitiesPerPipeline: maxActivities,
-      maxActivitiesPipelineName: maxPipelineName
+      maxActivitiesPipelineName: maxPipelineName,
+      customActivitiesCount,
+      totalCustomActivityReferences,
+      customActivitiesWithMultipleReferences
     };
   }
 
@@ -1562,13 +1682,29 @@ class ADFParserService {
     const dataflows = components.filter(c => c.type === 'mappingDataFlow');
 
     const usageStats = this.calculateUsageStatistics(components);
+    
+    // Build parameterized LinkedService summaries
+    const parameterizedLinkedServices = linkedServices
+      .filter(ls => ls.parameterizedLinkedServiceInfo)
+      .map(ls => {
+        const info = ls.parameterizedLinkedServiceInfo!;
+        return {
+          name: info.linkedServiceName,
+          type: info.linkedServiceType,
+          parameterCount: info.parameters.length,
+          parameters: info.parameters.map(p => p.name),
+          affectedPipelines: info.affectedPipelines,
+          affectedPipelinesCount: info.affectedPipelines.length
+        };
+      });
 
     return {
       pipelines: this.buildPipelineArtifacts(pipelines, usageStats.triggersPerPipeline),
       datasets: this.buildDatasetArtifacts(datasets, usageStats.pipelinesPerDataset),
       linkedServices: this.buildLinkedServiceArtifacts(linkedServices, usageStats.datasetsPerLinkedService),
       triggers: this.buildTriggerArtifacts(triggers, usageStats.pipelinesPerTrigger),
-      dataflows: this.buildDataflowArtifacts(dataflows)
+      dataflows: this.buildDataflowArtifacts(dataflows),
+      parameterizedLinkedServices
     };
   }
 
@@ -1639,11 +1775,41 @@ class ADFParserService {
       const folderInfo = extractFolderFromPipeline(pipeline);
       const folder = folderInfo ? folderInfo.path : null;
 
-      const activitySummaries: ActivitySummary[] = activities.map((activity: any) => ({
-        name: activity.name || 'Unnamed',
-        type: activity.type || 'Unknown',
-        description: activity.description
-      }));
+      const activitySummaries: ActivitySummary[] = activities.map((activity: any) => {
+        const summary: ActivitySummary = {
+          name: activity.name || 'Unnamed',
+          type: activity.type || 'Unknown',
+          description: activity.description
+        };
+        
+        // Add Custom activity metadata
+        if (activity.type === 'Custom') {
+          summary.isCustomActivity = true;
+          summary.customActivityReferences = {};
+          
+          // Track activity-level LinkedService reference
+          if (activity.linkedServiceName?.referenceName) {
+            summary.customActivityReferences.activityLevel = activity.linkedServiceName.referenceName;
+          }
+          
+          // Track resource LinkedService reference
+          if (activity.typeProperties?.resourceLinkedService?.referenceName) {
+            summary.customActivityReferences.resource = activity.typeProperties.resourceLinkedService.referenceName;
+          }
+          
+          // Track reference objects LinkedService references
+          if (activity.typeProperties?.referenceObjects?.linkedServices) {
+            const linkedServices = activity.typeProperties.referenceObjects.linkedServices;
+            if (Array.isArray(linkedServices)) {
+              summary.customActivityReferences.referenceObjects = linkedServices.map((ls: any) => 
+                ls.referenceName || 'Unknown'
+              );
+            }
+          }
+        }
+        
+        return summary;
+      });
 
       const usesDatasets: string[] = [];
       const executesPipelines: string[] = [];
@@ -1684,6 +1850,7 @@ class ADFParserService {
       // NEW: Extract resource-level dependencies from component
       const dependsOnPipelines = pipeline.resourceDependencies?.pipelines || [];
       const dependsOnLinkedServices = pipeline.resourceDependencies?.linkedServices || [];
+      const dependsOnDataflows = pipeline.resourceDependencies?.dataflows || [];
 
       return {
         name: pipeline.name,
@@ -1696,6 +1863,7 @@ class ADFParserService {
         usesLinkedServices,  // NEW
         dependsOnPipelines,  // NEW
         dependsOnLinkedServices,  // NEW
+        dependsOnDataflows,  // NEW
         folder,
         fabricMapping: {
           targetType: 'dataPipeline',
@@ -1866,6 +2034,8 @@ class ADFParserService {
    * Build dependency graph for visualization
    */
   private buildDependencyGraph(components: ADFComponent[], artifacts: ArtifactBreakdown): DependencyGraph {
+    console.log('[GRAPH] Building dependency graph from', components.length, 'components');
+    
     const nodes: GraphNode[] = [];
     const edges: GraphEdge[] = [];
 
@@ -2082,6 +2252,18 @@ class ADFParserService {
       });
     });
 
+    // NEW: Create edges for resource-level dependsOn (pipeline -> dataflow)
+    artifacts.pipelines.forEach(pipeline => {
+      pipeline.dependsOnDataflows?.forEach(dataflowName => {
+        edges.push({
+          source: `pipeline_${pipeline.name}`,
+          target: `dataflow_${dataflowName}`,
+          type: 'dependsOn',
+          label: 'depends on'
+        });
+      });
+    });
+
     // NEW: Create edges for trigger resource-level dependsOn (trigger -> pipeline)
     artifacts.triggers.forEach(trigger => {
       trigger.dependsOnPipelines?.forEach(pipelineName => {
@@ -2105,6 +2287,67 @@ class ADFParserService {
       });
     });
 
+    // NEW: Create edges for Custom activity LinkedService references
+    // Custom activities have 3 potential LinkedService reference locations, represented with color-coded edges
+    artifacts.pipelines.forEach(pipeline => {
+      pipeline.activities.forEach(activity => {
+        if (activity.isCustomActivity && activity.customActivityReferences) {
+          const customRefs = activity.customActivityReferences;
+          
+          // Location 1: Activity-level LinkedService (required) - Blue edge
+          if (customRefs.activityLevel) {
+            edges.push({
+              source: `pipeline_${pipeline.name}`,
+              target: `linkedService_${customRefs.activityLevel}`,
+              type: 'uses',
+              label: `Custom: ${activity.name} (activity-level)`
+            });
+          }
+          
+          // Location 2: Resource LinkedService (optional) - Orange edge
+          if (customRefs.resource) {
+            // Check if this edge already exists from location 1
+            const edgeExists = edges.some(e => 
+              e.source === `pipeline_${pipeline.name}` && 
+              e.target === `linkedService_${customRefs.resource}` &&
+              e.label?.includes(activity.name)
+            );
+            
+            if (!edgeExists) {
+              edges.push({
+                source: `pipeline_${pipeline.name}`,
+                target: `linkedService_${customRefs.resource}`,
+                type: 'references',
+                label: `Custom: ${activity.name} (resource)`
+              });
+            }
+          }
+          
+          // Location 3: Reference Objects LinkedServices (optional array) - Purple edges
+          if (customRefs.referenceObjects) {
+            customRefs.referenceObjects.forEach((linkedServiceName, index) => {
+              // Check if this edge already exists from previous locations
+              const edgeExists = edges.some(e => 
+                e.source === `pipeline_${pipeline.name}` && 
+                e.target === `linkedService_${linkedServiceName}` &&
+                e.label?.includes(activity.name)
+              );
+              
+              if (!edgeExists) {
+                edges.push({
+                  source: `pipeline_${pipeline.name}`,
+                  target: `linkedService_${linkedServiceName}`,
+                  type: 'references',
+                  label: `Custom: ${activity.name} (ref-obj[${index}])`
+                });
+              }
+            });
+          }
+        }
+      });
+    });
+
+    console.log('[GRAPH] Created', nodes.length, 'nodes and', edges.length, 'edges');
     return { nodes, edges };
   }
 

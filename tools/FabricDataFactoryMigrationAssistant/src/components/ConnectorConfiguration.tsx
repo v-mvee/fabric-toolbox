@@ -794,17 +794,17 @@ export function ConnectorConfiguration({
                       <span>{connectorInfo.displayName}</span>
                       <div className="flex items-center gap-1">
                         {connectorInfo.source === 'fabric' && (
-                          <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700">
+                          <Badge variant="outline" className="text-xs bg-blue-50 text-gray-900 border-blue-200">
                             API
                           </Badge>
                         )}
                         {connectorInfo.source === 'static' && (
-                          <Badge variant="outline" className="text-xs bg-gray-50 text-gray-700">
+                          <Badge variant="outline" className="text-xs bg-gray-50 text-gray-900 border-gray-200">
                             Static
                           </Badge>
                         )}
                         {connectorInfo.source === 'both' && (
-                          <Badge variant="outline" className="text-xs bg-green-50 text-green-700">
+                          <Badge variant="outline" className="text-xs bg-green-50 text-gray-900 border-green-200">
                             Verified
                           </Badge>
                         )}

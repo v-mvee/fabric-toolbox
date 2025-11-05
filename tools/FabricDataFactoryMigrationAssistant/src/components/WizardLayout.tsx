@@ -9,12 +9,13 @@ interface WizardLayoutProps {
   title: string;
   description?: string;
   showNavigation?: boolean;
+  nextButtonText?: string;
 }
 
 const stepTitles = [
-  'Login & Authentication',           // Step 0 - LoginPage
-  'Select Workspace',                // Step 1 - WorkspacePage  
-  'Upload ADF Template',             // Step 2 - UploadPage
+  'Upload ADF Template',             // Step 0 - UploadPage
+  'Login & Authentication',          // Step 1 - LoginPage
+  'Select Workspace',                // Step 2 - WorkspacePage  
   'Configure Workspace Identity',    // Step 3 - ManagedIdentityPage
   'Configure Connections',           // Step 4 - LinkedServiceConnectionPage
   'Deploy Connections',              // Step 5 - DeployConnectionsPage
@@ -24,7 +25,7 @@ const stepTitles = [
   'Migration Complete'               // Step 9 - CompletePage
 ];
 
-export function WizardLayout({ children, title, description, showNavigation = true }: WizardLayoutProps) {
+export function WizardLayout({ children, title, description, showNavigation = true, nextButtonText }: WizardLayoutProps) {
   const { 
     currentStep, 
     totalSteps, 
@@ -150,7 +151,7 @@ export function WizardLayout({ children, title, description, showNavigation = tr
               disabled={!canGoNext}
               className="flex items-center gap-1.5 px-4 py-2 text-sm"
             >
-              Next
+              {nextButtonText || 'Next'}
               <ArrowRight size={14} />
             </Button>
           </div>

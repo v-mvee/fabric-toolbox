@@ -8,6 +8,32 @@
 import { ADFProfile } from '../types/profiling';
 
 /**
+ * Safely convert a value to string, handling null/undefined
+ * @param value The value to convert
+ * @param fallback Fallback string if value is null/undefined
+ * @returns Safe string value
+ */
+function safeString(value: any, fallback: string = 'N/A'): string {
+  if (value === null || value === undefined) {
+    return fallback;
+  }
+  return String(value);
+}
+
+/**
+ * Safely convert a value to number, handling null/undefined
+ * @param value The value to convert
+ * @param fallback Fallback number if value is null/undefined
+ * @returns Safe number value
+ */
+function safeNumber(value: any, fallback: number = 0): number {
+  if (value === null || value === undefined || isNaN(value)) {
+    return fallback;
+  }
+  return Number(value);
+}
+
+/**
  * Export ADF profile to Markdown format with Mermaid diagrams
  * @param profile The ADF profile to export
  * @returns Markdown-formatted string
@@ -52,6 +78,21 @@ export function exportProfileToMarkdown(profile: ADFProfile): string {
     sections.push(``);
   }
 
+  // Parameterized Linked Services Warning
+  if (profile.artifacts.parameterizedLinkedServices && profile.artifacts.parameterizedLinkedServices.length > 0) {
+    sections.push(`\n## ⚠️ Parameterized Linked Services Warning\n`);
+    sections.push(`**Note:** Fabric Connections do not currently support parameters (feature on roadmap). The following Linked Services use parameters and will require manual reconfiguration:\n`);
+    sections.push(`| Linked Service | Type | Parameters | Affected Pipelines |`);
+    sections.push(`|----------------|------|----------:|--------------------|`);
+    profile.artifacts.parameterizedLinkedServices.forEach(pls => {
+      const pipelinesList = pls.affectedPipelines.length > 0 
+        ? pls.affectedPipelines.join(', ') 
+        : 'None';
+      sections.push(`| ${pls.name} | ${pls.type} | ${pls.parameterCount} | ${pipelinesList} |`);
+    });
+    sections.push(``);
+  }
+
   // Insights
   if (profile.insights.length > 0) {
     sections.push(`\n## 💡 Key Insights\n`);
@@ -71,9 +112,10 @@ export function exportProfileToMarkdown(profile: ADFProfile): string {
     sections.push(`| Pipeline Name | Activities | Triggered By | Uses Datasets | Fabric Status |`);
     sections.push(`|--------------|----------:|--------------|---------------|---------------|`);
     profile.artifacts.pipelines.forEach(p => {
-      const status = p.fabricMapping?.compatibilityStatus || 'unknown';
-      const triggers = p.triggeredBy.length > 0 ? p.triggeredBy.join(', ') : 'None';
-      sections.push(`| ${p.name} | ${p.activityCount} | ${triggers} | ${p.usesDatasets.length} | ${status} |`);
+      const status = safeString(p.fabricMapping?.compatibilityStatus, 'unknown');
+      const triggers = p.triggeredBy && p.triggeredBy.length > 0 ? p.triggeredBy.join(', ') : 'None';
+      const datasetCount = safeNumber(p.usesDatasets?.length, 0);
+      sections.push(`| ${safeString(p.name)} | ${safeNumber(p.activityCount)} | ${triggers} | ${datasetCount} | ${status} |`);
     });
     sections.push(``);
   }
@@ -84,7 +126,7 @@ export function exportProfileToMarkdown(profile: ADFProfile): string {
     sections.push(`| Dataset Name | Type | Linked Service | Used By Pipelines |`);
     sections.push(`|-------------|------|----------------|------------------:|`);
     profile.artifacts.datasets.forEach(d => {
-      sections.push(`| ${d.name} | ${d.type} | ${d.linkedService} | ${d.usageCount} |`);
+      sections.push(`| ${safeString(d.name)} | ${safeString(d.type)} | ${safeString(d.linkedService)} | ${safeNumber(d.usageCount)} |`);
     });
     sections.push(``);
   }
@@ -96,7 +138,8 @@ export function exportProfileToMarkdown(profile: ADFProfile): string {
     sections.push(`|--------------------|------|----------------:|-----------:|:----------------:|`);
     profile.artifacts.linkedServices.forEach(ls => {
       const requiresGateway = ls.fabricMapping?.requiresGateway ? '✓' : '';
-      sections.push(`| ${ls.name} | ${ls.type} | ${ls.usedByDatasets.length} | ${ls.usageScore} | ${requiresGateway} |`);
+      const datasetCount = safeNumber(ls.usedByDatasets?.length, 0);
+      sections.push(`| ${safeString(ls.name)} | ${safeString(ls.type)} | ${datasetCount} | ${safeNumber(ls.usageScore)} | ${requiresGateway} |`);
     });
     sections.push(``);
   }
@@ -107,8 +150,9 @@ export function exportProfileToMarkdown(profile: ADFProfile): string {
     sections.push(`| Trigger Name | Type | Status | Target Pipelines | Fabric Support |`);
     sections.push(`|-------------|------|--------|-----------------|----------------|`);
     profile.artifacts.triggers.forEach(t => {
-      const supportLevel = t.fabricMapping?.supportLevel || 'unknown';
-      sections.push(`| ${t.name} | ${t.type} | ${t.status} | ${t.pipelines.join(', ')} | ${supportLevel} |`);
+      const supportLevel = safeString(t.fabricMapping?.supportLevel, 'unknown');
+      const pipelinesList = t.pipelines && t.pipelines.length > 0 ? t.pipelines.join(', ') : 'None';
+      sections.push(`| ${safeString(t.name)} | ${safeString(t.type)} | ${safeString(t.status)} | ${pipelinesList} | ${supportLevel} |`);
     });
     sections.push(``);
   }
@@ -119,8 +163,8 @@ export function exportProfileToMarkdown(profile: ADFProfile): string {
     sections.push(`| Dataflow Name | Sources | Sinks | Transformations | Migration Path |`);
     sections.push(`|--------------|--------:|------:|----------------:|----------------|`);
     profile.artifacts.dataflows.forEach(df => {
-      const migrationPath = df.fabricMapping?.targetType || 'Manual';
-      sections.push(`| ${df.name} | ${df.sourceCount} | ${df.sinkCount} | ${df.transformationCount} | ${migrationPath} |`);
+      const migrationPath = safeString(df.fabricMapping?.targetType, 'Manual');
+      sections.push(`| ${safeString(df.name)} | ${safeNumber(df.sourceCount)} | ${safeNumber(df.sinkCount)} | ${safeNumber(df.transformationCount)} | ${migrationPath} |`);
     });
     sections.push(``);
   }
@@ -374,7 +418,10 @@ export function exportProfileToMarkdown(profile: ADFProfile): string {
  * @param id Original node ID
  * @returns Sanitized ID safe for Mermaid
  */
-function sanitizeNodeId(id: string): string {
+function sanitizeNodeId(id: string | null | undefined): string {
+  if (!id) {
+    return 'unknown_node';
+  }
   return id.replace(/[^a-zA-Z0-9_]/g, '_');
 }
 

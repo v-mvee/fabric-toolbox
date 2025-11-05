@@ -20,6 +20,7 @@ A comprehensive web application that automates the migration of Azure Data Facto
 - [Deployment](#-deployment)
 - [User Guide](#-user-guide)
 - [Connector Mapping](#-connector-mapping)
+- [Dataset & Activity Support](#-dataset--activity-support)
 - [Synapse Support](#-synapse-support)
 - [Development](#-development)
 - [Troubleshooting](#-troubleshooting)
@@ -74,7 +75,7 @@ Each step provides clear guidance, validation, and error handling.
 - **Deep Profiling**: Analyzes pipelines, datasets, linked services, triggers, global parameters
 - **Dependency Mapping**: Builds complete dependency graphs
 - **Compatibility Validation**: Identifies supported/unsupported components
-- **Activity Analysis**: Supports 30+ activity types (Copy, Execute Pipeline, ForEach, If Condition, Web, Lookup, etc.)
+- **Activity Analysis**: Supports 20+ activity types with full transformation (Copy, Lookup, GetMetadata, Delete, ExecutePipeline, ForEach, IfCondition, Web, Script, Custom, and more)
 
 ### 3. **Intelligent Connector Mapping**
 
@@ -85,21 +86,50 @@ Supports 50+ connector types:
 - **SaaS Apps**: Salesforce, Dynamics 365, SAP, ServiceNow
 - **File Systems**: SFTP, FTP, HTTP, File Share
 
-### 4. **Workspace Identity Management**
+### 4. **Custom Activity Support**
+
+Full support for Custom activities with intelligent connection mapping:
+
+- **4-Tier Fallback System**: Automatically resolves connection references from multiple sources
+  - ✅ Reference ID-based mappings (primary method from UI)
+  - ✅ Activity name-based mappings (backward compatibility)
+  - ✅ LinkedService bridge (Configure Connections page)
+  - ✅ ConnectionService fallback (deployed connections registry)
+  
+- **Multiple Reference Locations**: Properly maps `externalReferences.connection` properties
+  - Activity-level: `linkedServiceName.referenceName` → `externalReferences.connection`
+  - Resource-level: `typeProperties.resourceLinkedService` → `typeProperties.externalReferences.connection`
+  - Reference objects: `typeProperties.referenceObjects.linkedServices[]` → preserved in `extendedProperties`
+
+- **Detailed Logging**: Console output with emoji indicators (✓ success, ⚠ warning, ✗ error) for debugging
+
+### 5. **Workspace Identity Management**
 
 - **Automatic Detection**: Identifies Managed Identity usages in ADF
 - **Seamless Conversion**: Maps to Fabric Workspace Identity
 - **Authentication Methods**: Supports Managed Identity, Service Principal, SQL Auth, Key-based
 - **Scope Management**: Handles Azure AD application registrations
 
-### 5. **Folder Structure Preservation**
+### 6. **Folder Structure Preservation**
 
 - Extracts ADF folder hierarchy
 - Creates matching folder structure in Fabric
 - Maintains organizational logic
 - Supports nested folders
 
-### 6. **Smart Schedule Configuration** ✨ NEW
+### 7. **Global Parameters Migration** ✨ NEW
+
+- **Automatic Detection**: Scans pipelines for `@pipeline().globalParameters.X` expressions
+- **Variable Library Deployment**: Creates Fabric Variable Library with all global parameters
+- **Expression Transformation**: Converts ADF global parameter references to Fabric library variables
+- **Data Type Mapping**: Handles String, Int, Float, Bool, Array, Object, SecureString types
+- **User Configuration**: Interactive UI for setting variable values and descriptions
+- **Conditional Workflow**: Only appears if global parameters are detected
+- **Base64 Encoding**: Properly encodes variables.json and settings.json for Fabric API
+- **Name Collision Detection**: Checks for existing Variable Libraries
+- **Deployment Order**: Variable Library deploys before pipelines for proper reference resolution
+
+### 8. **Smart Schedule Configuration** ✨ UPDATED
 
 - **Trigger State Detection**: Automatically detects Started/Stopped status from ADF triggers
 - **Visual Schedule Management**: See exactly which pipelines each schedule will activate
@@ -109,7 +139,7 @@ Supports 50+ connector types:
 - **Full Control**: Review and adjust all schedule settings before deployment
 - **Runtime State Awareness**: Clearly indicates if source ADF trigger was running or stopped
 
-### 7. **Deployment Features**
+### 9. **Deployment Features**
 
 - **Progress Tracking**: Real-time deployment status
 - **Error Handling**: Detailed error messages with resolution guidance
@@ -117,7 +147,7 @@ Supports 50+ connector types:
 - **Batch Operations**: Deploy multiple components simultaneously
 - **Validation**: Pre-deployment compatibility checks
 
-### 8. **Synapse Support**
+### 10. **Synapse Support**
 
 - Full support for Azure Synapse Analytics pipelines
 - Synapse-specific activities (Notebook, Spark Job, SQL Pool)
@@ -785,7 +815,38 @@ npm run dev
    - Filter and search
 3. Review dependency graph
 
-#### Step 8: Map to Fabric
+#### Step 8: Configure Global Parameters (Conditional) ✨ NEW
+
+*This step only appears if global parameters are detected in your pipelines*
+
+1. **Review Detected Parameters**:
+   - View all global parameters found in pipeline expressions
+   - See which pipelines reference each parameter
+   - Auto-detected ADF data types
+
+2. **Configure Variable Library**:
+   - Set library name (default: `{FactoryName}_GlobalParameters`)
+   - Add optional description
+   - Review variable naming (prefixed with `VariableLibrary_`)
+
+3. **Set Variable Values**:
+   - Configure data types (String, Integer, Number, Boolean)
+   - Enter default values for each variable
+   - Add optional notes/descriptions
+   - Handle SecureString types (requires actual value, not placeholder)
+
+4. **Deploy Variable Library**:
+   - Click "Deploy Variable Library"
+   - Library is created in Fabric workspace
+   - Must complete before pipeline deployment
+   - Option to skip (pipelines won't reference global parameters)
+
+5. **What Happens**:
+   - Expressions like `@pipeline().globalParameters.MyParam` are transformed to `@pipeline().libraryVariables.VariableLibrary_MyParam`
+   - `libraryVariables` section is injected into each pipeline
+   - Variable Library is deployed **before** pipelines
+
+#### Step 9: Map to Fabric
 
 1. Review component mappings:
    - ADF component → Fabric item type
@@ -796,7 +857,7 @@ npm run dev
    - Adjust names
    - Reorganize folders
 
-#### Step 9: Deploy to Fabric
+#### Step 10: Deploy to Fabric
 
 1. Review deployment summary
 2. Click "Start Deployment"
@@ -810,7 +871,7 @@ npm run dev
    - Errors (with details)
    - Rollback option
 
-#### Step 10: Complete
+#### Step 11: Complete
 
 1. View migration summary
 2. Options:
@@ -847,7 +908,290 @@ For detailed connector mapping information, see [CONNECTOR_MAPPING.md](CONNECTOR
 
 ---
 
-## 🔄 Synapse Support
+## � Dataset & Activity Support
+
+### Dataset Handling
+
+#### How Datasets Are Transformed
+
+In **ADF/Synapse**, datasets are separate reusable components that define data structures and connection details. In **Microsoft Fabric**, datasets are embedded directly within activities as `datasetSettings`.
+
+**Transformation Process:**
+
+1. **Dataset Extraction**: The application parses dataset definitions from ARM templates
+2. **Parameter Substitution**: Dataset parameters are resolved at transformation time
+3. **Embedding**: Dataset configurations are embedded into activity definitions
+4. **Connection Mapping**: LinkedService references are converted to Fabric connection IDs
+
+**Example Transformation:**
+
+```json
+// ADF: Separate Dataset + Activity Reference
+{
+  "dataset": {
+    "name": "SourceDataset",
+    "properties": {
+      "type": "DelimitedText",
+      "linkedServiceName": { "referenceName": "AzureBlobStorage" },
+      "typeProperties": {
+        "location": {
+          "folderPath": "@dataset().FolderPath",
+          "fileName": "data.csv"
+        }
+      },
+      "parameters": {
+        "FolderPath": { "type": "string" }
+      }
+    }
+  },
+  "activity": {
+    "type": "Copy",
+    "inputs": [{
+      "referenceName": "SourceDataset",
+      "parameters": { "FolderPath": "@pipeline().parameters.SourceFolder" }
+    }]
+  }
+}
+
+// Fabric: Embedded Dataset Settings
+{
+  "activity": {
+    "type": "Copy",
+    "typeProperties": {
+      "source": {
+        "type": "DelimitedTextSource",
+        "datasetSettings": {
+          "type": "DelimitedText",
+          "typeProperties": {
+            "location": {
+              "folderPath": "@pipeline().parameters.SourceFolder",
+              "fileName": "data.csv"
+            }
+          },
+          "externalReferences": {
+            "connection": "<fabric-connection-id>"
+          }
+        }
+      }
+    }
+  }
+}
+```
+
+#### Dataset Parameters
+
+**Important**: Dataset parameters are **NOT** promoted to pipeline-level parameters. This is by design because:
+
+- ✅ **Dynamic Values**: Parameters can reference pipeline parameters, variables, or activity outputs
+- ✅ **Runtime Binding**: Values are resolved during pipeline execution, not at deployment
+- ✅ **Expression Support**: Supports complex expressions like `@activity('Lookup1').output.value`
+
+**During transformation**, the application:
+1. Extracts parameter values from activity inputs/outputs
+2. Substitutes parameter references (e.g., `@dataset().FolderPath`) with actual values
+3. Embeds the resolved configuration into `datasetSettings`
+
+**Supported Parameter References:**
+- `@dataset().parameterName` - Direct parameter reference
+- `@{dataset().parameterName}` - Expression-wrapped parameter
+- `@pipeline().parameters.X` - Pipeline parameter reference
+- `@activity('X').output.Y` - Activity output reference
+- `@variables('X')` - Pipeline variable reference
+
+---
+
+### Supported Activities
+
+The application supports all common ADF/Synapse activities with dataset references and connection mappings.
+
+#### ✅ Fully Supported Activities
+
+| Activity Type | Dataset Support | Connection Mapping | Transformation | Notes |
+|---------------|----------------|-------------------|----------------|-------|
+| **Copy** | ✅ Source + Sink | ✅ Automatic | ✅ Full | Comprehensive transformation with datasetSettings embedding |
+| **Lookup** | ✅ Single dataset | ✅ Automatic | ✅ Full | Dataset embedded in typeProperties |
+| **GetMetadata** | ✅ Single dataset | ✅ Automatic | ✅ Full | Field list and dataset settings preserved |
+| **Delete** | ✅ Single dataset | ✅ Automatic | ✅ Full | Wildcard and recursive options supported |
+| **ExecutePipeline** | ❌ N/A | ❌ N/A | ✅ Full | Pipeline references and parameter passing |
+| **ForEach** | ❌ N/A | ❌ N/A | ✅ Full | Nested activities transformed recursively |
+| **IfCondition** | ❌ N/A | ❌ N/A | ✅ Full | True/false branch activities transformed |
+| **Until** | ❌ N/A | ❌ N/A | ✅ Full | Loop activities transformed recursively |
+| **Wait** | ❌ N/A | ❌ N/A | ✅ Full | Simple wait duration |
+| **SetVariable** | ❌ N/A | ❌ N/A | ✅ Full | Variable assignment |
+| **AppendVariable** | ❌ N/A | ❌ N/A | ✅ Full | Array variable append |
+| **Filter** | ❌ N/A | ❌ N/A | ✅ Full | Array filtering |
+| **Switch** | ❌ N/A | ❌ N/A | ✅ Full | Multi-branch conditional |
+| **Web** | ❌ N/A | ⚠️ Optional | ✅ Full | HTTP requests, optional LinkedService for authentication |
+| **WebHook** | ❌ N/A | ⚠️ Optional | ✅ Full | Callback-based HTTP integration |
+| **Custom** | ❌ N/A | ✅ Advanced | ✅ Full | 4-tier connection resolution (see Custom Activity Support) |
+| **SqlServerStoredProcedure** | ❌ N/A | ✅ Automatic | ✅ Full | Activity-level LinkedService reference |
+| **Script** | ❌ N/A | ✅ Automatic | ✅ Full | SQL/PowerShell script execution |
+| **Databricks Notebook** | ❌ N/A | ✅ Automatic | ✅ Full | Notebook path and parameters |
+| **Databricks Jar** | ❌ N/A | ✅ Automatic | ✅ Full | Jar activity parameters |
+| **Databricks Python** | ❌ N/A | ✅ Automatic | ✅ Full | Python file execution |
+| **HDInsight** | ❌ N/A | ✅ Automatic | ✅ Full | Hive, Pig, MapReduce, Spark, Streaming |
+| **Azure Function** | ❌ N/A | ⚠️ Optional | ✅ Full | Function invocation with parameters |
+| **Azure ML** | ❌ N/A | ✅ Automatic | ✅ Full | Batch execution and update resource |
+
+#### ⚠️ Partial Support
+
+| Activity Type | Status | Limitation | Workaround |
+|---------------|--------|------------|------------|
+| **Synapse Notebook** | ⚠️ Partial | Notebook must be manually migrated | Deploy notebooks to Fabric separately, update references |
+| **Synapse Spark Job** | ⚠️ Partial | Spark job definition not auto-migrated | Recreate Spark jobs in Fabric, update activity |
+| **SQL Pool Stored Procedure** | ⚠️ Partial | SQL Pool not available in Fabric | Migrate to Synapse SQL endpoint or Lakehouse |
+
+#### ❌ Not Supported in Fabric
+
+| Activity Type | ADF/Synapse | Fabric | Alternative |
+|---------------|-------------|--------|-------------|
+| **Validation** | ✅ Exists | ❌ Not available | Use GetMetadata + IfCondition to check file existence |
+| **Data Flow** | ✅ Mapping Data Flows | ❌ Not supported | Use Dataflow Gen2 (requires manual recreation) |
+
+---
+
+### Activity-Dataset Relationships
+
+#### Activities That Use Datasets
+
+The following activities reference datasets and have their LinkedService connections automatically mapped:
+
+**Copy Activity** (2 datasets):
+- Source dataset via `inputs[0]`
+- Sink dataset via `outputs[0]`
+
+**Lookup Activity** (1 dataset):
+- Dataset via `typeProperties.dataset.referenceName`
+
+**GetMetadata Activity** (1 dataset):
+- Dataset via `typeProperties.dataset.referenceName`
+
+**Delete Activity** (1 dataset):
+- Dataset via `typeProperties.dataset.referenceName`
+
+#### Activities with Direct LinkedService References
+
+These activities reference LinkedServices directly (not through datasets):
+
+- **SqlServerStoredProcedure**: `activity.linkedServiceName`
+- **Script**: `activity.linkedServiceName`
+- **Web/WebHook**: `activity.linkedServiceName` (optional)
+- **Custom**: Multiple locations (see Custom Activity Support section)
+- **Databricks**: `activity.linkedServiceName`
+- **HDInsight**: `activity.linkedServiceName`
+- **Azure Function**: `activity.linkedServiceName`
+
+#### Control Flow Activities (No Connections)
+
+These activities don't reference datasets or connections:
+- ForEach, IfCondition, Until, Switch, Wait
+- SetVariable, AppendVariable, Filter
+- ExecutePipeline (references other pipelines)
+
+---
+
+### Migration Best Practices
+
+#### For Activities with Datasets
+
+1. **Review Dataset Parameters**: Ensure parameter expressions are valid in Fabric
+2. **Check Connection Mappings**: Verify all datasets' LinkedServices are mapped in Step 5
+3. **Test with Sample Data**: Deploy to dev workspace first
+4. **Validate Schema**: Ensure source/sink schemas are compatible
+
+#### For Activities without Dataset Support in Fabric
+
+**Validation Activity** → **GetMetadata + IfCondition**:
+```json
+// Before (ADF):
+{
+  "type": "Validation",
+  "typeProperties": {
+    "dataset": { "referenceName": "CheckFile" },
+    "timeout": "0.00:05:00"
+  }
+}
+
+// After (Fabric):
+{
+  "type": "GetMetadata",
+  "name": "CheckFileExists",
+  "typeProperties": {
+    "datasetSettings": { /* embedded dataset */ },
+    "fieldList": ["exists"]
+  }
+},
+{
+  "type": "IfCondition",
+  "name": "ValidateFileExists",
+  "dependsOn": [{ "activity": "CheckFileExists" }],
+  "typeProperties": {
+    "expression": {
+      "value": "@activity('CheckFileExists').output.exists",
+      "type": "Expression"
+    },
+    "ifFalseActivities": [
+      {
+        "type": "Fail",
+        "name": "FileNotFound",
+        "typeProperties": {
+          "message": "Required file does not exist"
+        }
+      }
+    ]
+  }
+}
+```
+
+---
+
+### Troubleshooting Dataset Issues
+
+#### Dataset Not Found
+
+**Symptom**: Error during transformation: "Dataset 'XYZ' not found"
+
+**Causes**:
+- Dataset not included in ARM template export
+- Dataset name mismatch (case-sensitive)
+- Dataset defined in different data factory
+
+**Solution**:
+- Re-export ARM template with all dependencies
+- Verify dataset names in uploaded template
+- Use "Select all" when exporting from ADF
+
+#### Connection Mapping Missing
+
+**Symptom**: Activity deployed without `externalReferences.connection`
+
+**Causes**:
+- LinkedService not mapped in Step 5 (Configure Connections)
+- Dataset references LinkedService not in template
+- Connection deployment failed
+
+**Solution**:
+- Check Step 5 mapping table for missing LinkedServices
+- Verify all LinkedServices exported in ARM template
+- Review Step 6 deployment logs for connection errors
+
+#### Parameter Substitution Failed
+
+**Symptom**: Dataset parameter appears as literal `@dataset().paramName` in deployed pipeline
+
+**Causes**:
+- Parameter not passed from activity to dataset
+- Invalid parameter expression syntax
+- Circular parameter reference
+
+**Solution**:
+- Verify activity passes parameter: `"parameters": { "paramName": "value" }`
+- Check ADF expression syntax is valid
+- Ensure parameters don't reference themselves
+
+---
+
+## �🔄 Synapse Support
 
 For detailed Synapse support information, see [SYNAPSE_SUPPORT.md](SYNAPSE_SUPPORT.md).
 
@@ -994,9 +1338,41 @@ npm run test:coverage # Generate coverage report
 
 **Solutions**:
 - ✅ Ensure all connections are deployed successfully first
-- ✅ Verify activities are supported (see supported activities list)
+- ✅ Verify activities are supported (see [Dataset & Activity Support](#-dataset--activity-support))
 - ✅ Check parameter names are valid (alphanumeric + underscore)
 - ✅ Review error message for specific validation issues
+
+#### Custom Activity Connection Issues
+
+**Symptoms**: Custom activities deployed without connection references
+
+**Problem**: Missing `externalReferences.connection` in deployed pipeline JSON, activities fail to access external resources
+
+**Solutions**:
+
+The application uses a 4-tier fallback system to resolve connections. Check browser console for mapping logs:
+
+```
+✓ Custom activity [P1-NEW] activity-level connection found via referenceMappings
+✓ Custom activity [P2-OLD] resource connection found via customActivityReferences
+✓ Custom activity [P3-BRIDGE] connection found via linkedServiceBridge
+⚠ Custom activity [P4-FALLBACK] using connection service fallback
+✗ No connection mapping found for Custom activity LinkedService
+```
+
+**Debugging Steps**:
+1. ✅ Verify connections configured in "Configure Connections" page (step 5)
+2. ✅ Check "Map Components" page shows all custom activities with dropdowns (step 8)
+3. ✅ Review browser console (F12) for detailed connection resolution logs
+4. ✅ Ensure connection IDs match between Configure Connections and Map Components
+5. ✅ Verify LinkedService names in ADF template match dropdown options
+
+**Technical Details**: Custom activities have 3 LinkedService reference locations:
+- **Activity-level**: `linkedServiceName.referenceName` → `externalReferences.connection`
+- **Resource-level**: `typeProperties.resourceLinkedService` → `typeProperties.externalReferences.connection`
+- **Reference objects**: `typeProperties.referenceObjects.linkedServices[]` → preserved in `extendedProperties`
+
+Each location must be mapped to a Fabric connection ID. The transformer attempts multiple mapping strategies automatically with fallback priorities.
 
 ### Debug Mode
 
