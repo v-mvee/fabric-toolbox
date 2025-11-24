@@ -1,6 +1,7 @@
 import { activityTransformer } from './activityTransformer';
 import { copyActivityTransformer } from './copyActivityTransformer';
 import { customActivityTransformer } from './customActivityTransformer';
+import { hdinsightActivityTransformer } from './hdinsightActivityTransformer';
 import { connectionService } from './connectionService';
 import { fabricApiClient } from './fabricApiClient';
 import { ADFComponent, DeploymentResult, PipelineConnectionMappings, LinkedServiceConnectionBridge } from '../types';
@@ -20,6 +21,14 @@ export class PipelineTransformer {
   setReferenceMappings(mappings: Record<string, Record<string, string>>) {
     this.referenceMappings = mappings;
     customActivityTransformer.setReferenceMappings(mappings);
+    hdinsightActivityTransformer.setReferenceMappings(mappings);
+  }
+
+  /**
+   * Get reference mappings (for passing to transformer services)
+   */
+  getReferenceMappings(): Record<string, Record<string, string>> | undefined {
+    return this.referenceMappings;
   }
 
   /**
@@ -28,6 +37,14 @@ export class PipelineTransformer {
   setLinkedServiceBridge(bridge: LinkedServiceConnectionBridge) {
     this.linkedServiceBridge = bridge;
     customActivityTransformer.setLinkedServiceBridge(bridge);
+    hdinsightActivityTransformer.setLinkedServiceBridge(bridge);
+  }
+
+  /**
+   * Get LinkedService bridge (for passing to transformer services)
+   */
+  getLinkedServiceBridge(): LinkedServiceConnectionBridge | undefined {
+    return this.linkedServiceBridge;
   }
 
   transformPipelineDefinition(definition: any, connectionMappings?: PipelineConnectionMappings, pipelineName?: string): any {
@@ -141,8 +158,8 @@ export class PipelineTransformer {
     return activities.map(activity => {
       if (!activity || typeof activity !== 'object') return activity;
 
-      // Apply activity-level transformations (skip Copy and Custom - they have specialized transformers)
-      if (activity.type !== 'Copy' && activity.type !== 'Custom') {
+      // Apply activity-level transformations (skip Copy, Custom, and HDInsight - they have specialized transformers)
+      if (activity.type !== 'Copy' && activity.type !== 'Custom' && !this.isHDInsightActivity(activity.type)) {
         activityTransformer.transformLinkedServiceReferencesToFabric(activity);
       }
 
@@ -157,8 +174,15 @@ export class PipelineTransformer {
         // Pass connection mappings to Copy activity transformer
         transformedActivity = copyActivityTransformer.transformCopyActivity(activity, connectionMappings);
       } else if (activity.type === 'Custom') {
-        // NEW: Transform Custom activities with connection mappings
+        // Transform Custom activities with connection mappings
         transformedActivity = customActivityTransformer.transformCustomActivity(
+          activity,
+          pipelineName,
+          connectionMappings
+        );
+      } else if (this.isHDInsightActivity(activity.type)) {
+        // NEW: Transform HDInsight activities with connection mappings
+        transformedActivity = hdinsightActivityTransformer.transformHDInsightActivity(
           activity,
           pipelineName,
           connectionMappings
@@ -203,6 +227,10 @@ export class PipelineTransformer {
         return typeProperties;
       case 'Custom':
         // Custom activities are already fully transformed by customActivityTransformer
+        // Return as-is to avoid overriding the detailed transformation
+        return typeProperties;
+      case 'AzureHDInsight':
+        // HDInsight activities are already fully transformed by hdinsightActivityTransformer
         // Return as-is to avoid overriding the detailed transformation
         return typeProperties;
       case 'ExecutePipeline': return this.transformExecutePipelineProperties(typeProperties);
@@ -461,7 +489,9 @@ export class PipelineTransformer {
         pipelineDefinition = PipelineConnectionTransformerService.transformPipelineWithConnections(
           pipelineDefinition, 
           component.name, 
-          connectionMappings
+          connectionMappings,
+          this.referenceMappings, // Pass NEW format mappings
+          this.linkedServiceBridge // Pass bridge from Configure Connections
         );
       }
       
@@ -546,6 +576,20 @@ export class PipelineTransformer {
       }
     }
     return updatedDefinition;
+  }
+
+  /**
+   * Helper method to check if an activity is an HDInsight activity type
+   */
+  private isHDInsightActivity(activityType: string): boolean {
+    const hdinsightTypes = [
+      'HDInsightHive',
+      'HDInsightPig',
+      'HDInsightMapReduce',
+      'HDInsightSpark',
+      'HDInsightStreaming'
+    ];
+    return hdinsightTypes.includes(activityType);
   }
 }
 

@@ -39,6 +39,9 @@ const ACTIVITY_TYPE_COLORS: Record<ActivityTypeEnum, { color: string; iconName: 
   'DatabricksSparkPython': { color: '#f97316', iconName: 'Code', label: 'Databricks Spark Python' },
   'HDInsightSpark': { color: '#f97316', iconName: 'Flame', label: 'HDInsight Spark' },
   'HDInsightHive': { color: '#f97316', iconName: 'Database', label: 'HDInsight Hive' },
+  'HDInsightPig': { color: '#ea580c', iconName: 'Code', label: 'HDInsight Pig' },
+  'HDInsightMapReduce': { color: '#dc2626', iconName: 'Function', label: 'HDInsight MapReduce' },
+  'HDInsightStreaming': { color: '#fb923c', iconName: 'Flow', label: 'HDInsight Streaming' },
   'SynapseNotebook': { color: '#f97316', iconName: 'FileCode', label: 'Synapse Notebooks' },
   'SynapseSparkJob': { color: '#f97316', iconName: 'Zap', label: 'Synapse Spark Jobs' },
   'Script': { color: '#8b5cf6', iconName: 'FileText', label: 'Script Activities' },
@@ -84,6 +87,9 @@ export class UnifiedActivityMappingService {
       'DatabricksSparkPython': 'DatabricksSparkPython',
       'HDInsightSpark': 'HDInsightSpark',
       'HDInsightHive': 'HDInsightHive',
+      'HDInsightPig': 'HDInsightPig',
+      'HDInsightMapReduce': 'HDInsightMapReduce',
+      'HDInsightStreaming': 'HDInsightStreaming',
       'SynapseNotebook': 'SynapseNotebook',
       'SynapseSparkJob': 'SynapseSparkJob',
       'Script': 'Script'
@@ -358,6 +364,41 @@ export class UnifiedActivityMappingService {
         });
       }
 
+      return references;
+    }
+
+    // Handle HDInsight activities (dual connections: cluster + storage)
+    if (['HDInsightSpark', 'HDInsightHive', 'HDInsightPig', 'HDInsightMapReduce', 'HDInsightStreaming'].includes(activityType)) {
+      // 1. Cluster connection (activity-level)
+      if (activity.linkedServiceName?.referenceName) {
+        const linkedServiceName = activity.linkedServiceName.referenceName;
+        const referenceId = `${pipelineName}_${activity.name}_cluster`;
+        references.push({
+          referenceId,
+          location: 'activity-level',
+          linkedServiceName,
+          displayName: 'HDInsight Cluster',
+          isRequired: true,
+          // Try referenceId first, then fallback to linkedServiceName for backwards compatibility
+          selectedConnectionId: existingMappings?.[referenceId] || existingMappings?.[linkedServiceName]
+        });
+      }
+      
+      // 2. Storage connection (typeProperties.scriptLinkedService)
+      if (activity.typeProperties?.scriptLinkedService?.referenceName) {
+        const linkedServiceName = activity.typeProperties.scriptLinkedService.referenceName;
+        const referenceId = `${pipelineName}_${activity.name}_storage`;
+        references.push({
+          referenceId,
+          location: 'typeProperties',
+          linkedServiceName,
+          displayName: 'Script Storage',
+          isRequired: true,
+          // Try referenceId first, then fallback to linkedServiceName for backwards compatibility
+          selectedConnectionId: existingMappings?.[referenceId] || existingMappings?.[linkedServiceName]
+        });
+      }
+      
       return references;
     }
 

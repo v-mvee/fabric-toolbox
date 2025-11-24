@@ -1842,7 +1842,9 @@ export class FabricService {
         pipelineDefinition = PipelineConnectionTransformerService.transformPipelineWithConnections(
           pipelineDefinition, 
           component.name, 
-          pipelineConnectionMappings
+          pipelineConnectionMappings,
+          pipelineTransformer.getReferenceMappings(), // Pass NEW format mappings
+          pipelineTransformer.getLinkedServiceBridge() // Pass bridge from Configure Connections
         );
       }
 

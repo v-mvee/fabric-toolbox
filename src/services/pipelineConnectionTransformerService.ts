@@ -11,13 +11,17 @@ export class PipelineConnectionTransformerService {
    * Transforms a pipeline definition by applying connection mappings
    * @param pipelineDefinition The original pipeline definition
    * @param pipelineName The name of the pipeline
-   * @param connectionMappings The mappings from activities to Fabric connections
+   * @param connectionMappings The mappings from activities to Fabric connections (OLD format - backward compatibility)
+   * @param pipelineReferenceMappings The reference-based mappings (NEW format - from ComponentMappingTableV2)
+   * @param linkedServiceBridge Bridge mappings from Configure Connections page
    * @returns The transformed pipeline definition
    */
   static transformPipelineWithConnections(
     pipelineDefinition: any,
     pipelineName: string,
-    connectionMappings: PipelineConnectionMappings
+    connectionMappings: PipelineConnectionMappings,
+    pipelineReferenceMappings?: Record<string, Record<string, string>>,
+    linkedServiceBridge?: Record<string, any>
   ): any {
     if (!pipelineDefinition || !pipelineDefinition.properties) {
       console.warn(`Invalid pipeline definition for ${pipelineName}`);
@@ -28,44 +32,76 @@ export class PipelineConnectionTransformerService {
     const activities = transformedDefinition.properties.activities || [];
 
     const pipelineMappings = connectionMappings[pipelineName] || {};
+    const referenceMappings = pipelineReferenceMappings?.[pipelineName] || {};
     
     console.log(`Applying connection mappings for pipeline '${pipelineName}':`, {
       availableMappings: Object.keys(pipelineMappings),
+      availableReferenceMappings: Object.keys(referenceMappings),
       activitiesCount: activities.length,
-      mappingsCount: Object.keys(pipelineMappings).length
+      mappingsCount: Object.keys(pipelineMappings).length,
+      referenceMappingsCount: Object.keys(referenceMappings).length,
+      hasLinkedServiceBridge: Boolean(linkedServiceBridge)
     });
+
+    /**
+     * Helper: Find connection ID for activity with 4-tier fallback system and logging
+     * Priority 1: 🎯 NEW referenceMappings (referenceId-based from ComponentMappingTableV2)
+     * Priority 2: 🔄 OLD pipelineConnectionMappings (backward compatibility)
+     * Priority 3: 🌉 BRIDGE linkedServiceBridge (from Configure Connections page)
+     * Priority 4: ❌ MISS - no mapping found
+     */
+    const findConnectionIdForActivity = (activityName: string, referenceId?: string, linkedServiceName?: string): string | undefined => {
+      // Priority 1: Try NEW referenceMappings
+      if (referenceId && referenceMappings[referenceId]) {
+        console.log(`  🎯 NEW format hit: ${activityName} (${referenceId}) → ${referenceMappings[referenceId]}`);
+        return referenceMappings[referenceId];
+      }
+
+      // Priority 2: Try OLD pipelineConnectionMappings (activity name based)
+      const activityMapping = pipelineMappings[activityName];
+      if (activityMapping?.selectedConnectionId) {
+        console.log(`  🔄 OLD format hit: ${activityName} → ${activityMapping.selectedConnectionId}`);
+        return activityMapping.selectedConnectionId;
+      }
+
+      // Priority 3: Try linkedServiceBridge (from Configure Connections)
+      if (linkedServiceName && linkedServiceBridge?.[linkedServiceName]) {
+        const bridgeConnectionId = linkedServiceBridge[linkedServiceName].connectionId;
+        console.log(`  🌉 BRIDGE hit: ${activityName} (${linkedServiceName}) → ${bridgeConnectionId}`);
+        return bridgeConnectionId;
+      }
+
+      // Priority 4: No mapping found
+      console.log(`  ❌ MISS: ${activityName} (referenceId: ${referenceId || 'none'}, linkedService: ${linkedServiceName || 'none'})`);
+      return undefined;
+    };
 
     // Transform each activity
     activities.forEach((activity: any) => {
       if (!activity?.name) return;
 
-      // Find all mappings for this activity (since we now use unique IDs that include LinkedService name)
-      const activityMappings = Object.entries(pipelineMappings).filter(([key, mapping]) => {
-        // Check if this mapping key starts with the activity name
-        return key.startsWith(`${activity.name}_`);
-      });
-
       console.log(`Processing activity '${activity.name}':`, {
         type: activity.type,
-        foundMappings: activityMappings.length,
-        mappingKeys: activityMappings.map(([key]) => key),
         hasLinkedServiceRefs: this.activityHasLinkedServiceReferences(activity)
       });
 
-      if (activityMappings.length > 0) {
-        // Apply all connection mappings for this activity
-        activityMappings.forEach(([mappingKey, activityMapping]) => {
-          if (activityMapping?.selectedConnectionId) {
-            console.log(`Applying connection mapping: ${mappingKey} -> ${activityMapping.selectedConnectionId}`);
-            
-            // Apply the connection mapping to this activity
-            this.applyConnectionMappingToActivity(activity, activityMapping.selectedConnectionId, mappingKey);
-          } else {
-            console.warn(`Connection mapping '${mappingKey}' has no selectedConnectionId`);
-          }
-        });
+      // Try to find connection ID using hybrid lookup
+      // For now, we check activity-level connection (most common case)
+      // Activity-specific transformers (Custom, Copy, etc.) handle multi-location activities
+      const activityLevelReferenceId = `${pipelineName}_${activity.name}_activity`;
+      const linkedServiceName = activity.linkedServiceName?.referenceName;
+      
+      const connectionId = findConnectionIdForActivity(
+        activity.name,
+        activityLevelReferenceId,
+        linkedServiceName
+      );
+
+      if (connectionId) {
+        // Apply the connection mapping to this activity
+        this.applyConnectionMappingToActivity(activity, connectionId, activityLevelReferenceId);
       } else {
-        // No specific mapping found, check if this activity has LinkedService references that need to be handled
+        // No mapping found - check if this activity has LinkedService references that need to be handled
         this.handleUnmappedLinkedServiceReferences(activity, pipelineName);
       }
 
